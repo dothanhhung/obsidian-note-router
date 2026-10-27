@@ -39,6 +39,14 @@ function addEntry(text, content, now) {
   return head + todayStamp(now) + '\n' + content + '\n\n' + rest;
 }
 
+// What stays behind in the source note: "↪ [[diary]] 27.10.2026 · today I feel…"
+function linkLine(app, target, source, content, now) {
+  const link = app.fileManager.generateMarkdownLink(target, source.path);
+  const words = content.replace(/\s+/g, ' ').trim();
+  const preview = words.length > 40 ? words.slice(0, 40).trimEnd() + '…' : words;
+  return `↪ ${link} ${todayStamp(now)} · ${preview}`;
+}
+
 module.exports = class NoteRouterPlugin extends Plugin {
   async onload() {
     this.registerEditorExtension(
@@ -108,14 +116,20 @@ module.exports = class NoteRouterPlugin extends Plugin {
       return;
     }
 
-    // Moved: remove the block (header .. end marker) from this note.
-    // Re-check it is still where we left it before deleting.
+    // Moved: swap the block (header .. end marker) for a one-line link.
+    // Re-check it is still where we left it before replacing.
     const d = view.state.doc;
     if (endLine <= d.lines && headLine <= d.lines &&
         END_RE.test(d.line(endLine).text) && HEAD_RE.test(d.line(headLine).text)) {
       const from = d.line(headLine).from;
-      const to = endLine < d.lines ? d.line(endLine + 1).from : d.line(endLine).to;
-      view.dispatch({ changes: { from, to, insert: '' }, userEvent: 'delete' });
+      const to = d.line(endLine).to;
+      const insert = linkLine(this.app, target, source, content, new Date());
+      view.dispatch({
+        changes: { from, to, insert },
+        // Cursor to the line below the link.
+        selection: { anchor: Math.min(from + insert.length + 1, d.length - (to - from) + insert.length) },
+        userEvent: 'delete',
+      });
     }
     new Notice(`Sent to "${target.basename}"`);
   }

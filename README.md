@@ -26,8 +26,8 @@ It works the same way with any note name: `ideas:`, `work:`, `plan:`…
 
 ## How it behaves
 - **End line** = 3 or more of the same mark on its own line: `___`, `---`, `...`, `///`, `===`, `***`, `~~~`.
-- **The name must match an existing note** (case does not matter; `folder/name` works too). If there is no such note, nothing happens. Lines like `Things to do:` inside your text are skipped when no note has that name.
-- **Moved, not copied.** After it is saved in the target, the block (name line, text, end line) is removed from the current note. Ctrl+Z brings it back in the current note, but the copy in the target stays.
+- **The name must match an existing note** (case does not matter; `folder/name` works too). If there is no such note, nothing happens and your text stays where it is. Lines like `Things to do:` inside your text are skipped when no note has that name.
+- **Moved, with a link left behind.** After it is saved in the target, the block in the current note becomes one line pointing to it, e.g. `↪ [[diary]] 27.10.2026 · Had a great idea about the new app…`. Ctrl+Z brings the block back in the current note, but the copy in the target stays.
 - **Today's date:** if the target's first line is already today's date (`27.10.2026` or `27.10`), the new entry goes right under it. Otherwise a new date line is added on top. Frontmatter stays first.
 - Writing `diary:` inside the diary note itself does nothing.
 - Works on desktop and mobile.
