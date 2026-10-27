@@ -1,13 +1,54 @@
 'use strict';
 
-const { Plugin, Notice, editorInfoField } = require('obsidian');
+const { Plugin, Modal, Notice, editorInfoField } = require('obsidian');
 const { EditorView } = require('@codemirror/view');
 
 // A line made only of 3+ of the same mark: ___  ---  ...  ///  ===  ***  ~~~
 const END_RE = /^\s*([_\-.\/=*~])\1{2,}\s*$/;
-// "diary:" alone on its line
-const HEAD_RE = /^\s*([^:#\[\]|]+?)\s*:\s*$/;
+// "@plan" or "@plan:" alone on its line -> always sent, no question
+const AT_RE = /^\s*@([^\s:#\[\]|@][^:#\[\]|@]*?)\s*:?\s*$/;
+// "plan:" alone on its line -> sent without asking only for trusted notes
+const COLON_RE = /^\s*([^:#\[\]|@]+?)\s*:\s*$/;
 const MAX_SCAN = 500; // lines to look back for the header
+const DEFAULT_TRUSTED = ['diary'];
+
+function parseHead(text) {
+  let m = text.match(AT_RE);
+  if (m) return { name: m[1], at: true };
+  m = text.match(COLON_RE);
+  if (m) return { name: m[1], at: false };
+  return null;
+}
+
+class ConfirmModal extends Modal {
+  constructor(app, name, preview, onPick) {
+    super(app);
+    this.name = name;
+    this.preview = preview;
+    this.onPick = onPick;
+    this.picked = 'keep';
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl('h3', { text: `Send to "${this.name}"?` });
+    contentEl.createEl('p', { text: this.preview });
+    const row = contentEl.createDiv({ cls: 'modal-button-container' });
+    const btn = (text, pick, cta) => {
+      const b = row.createEl('button', { text });
+      if (cta) b.addClass('mod-cta');
+      b.onclick = () => { this.picked = pick; this.close(); };
+      return b;
+    };
+    const send = btn('Send', 'send', true);
+    btn(`Always send to "${this.name}"`, 'always');
+    btn('Keep here', 'keep');
+    send.focus(); // Enter = Send, Esc = Keep here
+  }
+  onClose() {
+    this.contentEl.empty();
+    this.onPick(this.picked);
+  }
+}
 
 function pad(n) { return String(n).padStart(2, '0'); }
 function todayStamp(d) { return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`; }
@@ -49,6 +90,10 @@ function linkLine(app, target, source, content, now) {
 
 module.exports = class NoteRouterPlugin extends Plugin {
   async onload() {
+    const data = (await this.loadData()) || {};
+    // Notes that "name:" sends to without asking. Grows via "Always send".
+    this.trusted = Array.isArray(data.trusted) ? data.trusted : DEFAULT_TRUSTED.slice();
+
     this.registerEditorExtension(
       EditorView.updateListener.of((update) => this.onUpdate(update))
     );
@@ -91,16 +136,17 @@ module.exports = class NoteRouterPlugin extends Plugin {
     const doc = view.state.doc;
     if (endLine > doc.lines || !END_RE.test(doc.line(endLine).text)) return;
 
-    // Walk up to the nearest "name:" line whose name is an existing note.
+    // Walk up to the nearest "@name" / "name:" line whose name is an existing note.
     let headLine = 0;
     let target = null;
+    let at = false;
     for (let n = endLine - 1; n >= 1 && n >= endLine - MAX_SCAN; n--) {
       const text = doc.line(n).text;
       if (END_RE.test(text)) break; // previous block's end
-      const m = text.match(HEAD_RE);
-      if (!m) continue;
-      const file = this.findTarget(m[1], source);
-      if (file) { headLine = n; target = file; break; }
+      const h = parseHead(text);
+      if (!h) continue;
+      const file = this.findTarget(h.name, source);
+      if (file) { headLine = n; target = file; at = h.at; break; }
     }
     if (!target || target.path === source.path) return;
 
@@ -108,6 +154,21 @@ module.exports = class NoteRouterPlugin extends Plugin {
     for (let n = headLine + 1; n < endLine; n++) lines.push(doc.line(n).text);
     const content = lines.join('\n').replace(/^\s*\n/, '').replace(/\s+$/, '');
     if (!content) return;
+
+    // "plan:" for a note not yet trusted -> ask first. "@plan" never asks.
+    const key = target.basename.toLowerCase();
+    if (!at && !this.trusted.includes(key)) {
+      const words = content.replace(/\s+/g, ' ').trim();
+      const preview = words.length > 120 ? words.slice(0, 120) + '…' : words;
+      const pick = await new Promise((res) =>
+        new ConfirmModal(this.app, target.basename, preview, res).open());
+      if (pick === 'keep') return;
+      if (pick === 'always') {
+        this.trusted.push(key);
+        await this.saveData({ trusted: this.trusted });
+      }
+    }
+    const headText = doc.line(headLine).text;
 
     try {
       await this.app.vault.process(target, (text) => addEntry(text, content, new Date()));
@@ -120,7 +181,7 @@ module.exports = class NoteRouterPlugin extends Plugin {
     // Re-check it is still where we left it before replacing.
     const d = view.state.doc;
     if (endLine <= d.lines && headLine <= d.lines &&
-        END_RE.test(d.line(endLine).text) && HEAD_RE.test(d.line(headLine).text)) {
+        END_RE.test(d.line(endLine).text) && d.line(headLine).text === headText) {
       const from = d.line(headLine).from;
       const to = d.line(endLine).to;
       const insert = linkLine(this.app, target, source, content, new Date());

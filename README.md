@@ -24,6 +24,14 @@ older entry…
 
 It works the same way with any note name: `ideas:`, `work:`, `plan:`…
 
+## Two ways to write the name
+| You write | What happens |
+|---|---|
+| `@plan` or `@plan:` | Sent right away, no question. |
+| `plan:` | Sent right away only if the note is **trusted** (`diary` is trusted from the start). Otherwise a box asks: **Send** (Enter), **Always send to "plan"** (trusts it from now on), or **Keep here** (Esc). |
+
+So a normal line like `Plan:` in the middle of your writing never moves anything without asking. The trusted list is kept in the plugin's `data.json` (`"trusted": ["diary", …]`); delete a name there to be asked again.
+
 ## How it behaves
 - **End line** = 3 or more of the same mark on its own line: `___`, `---`, `...`, `///`, `===`, `***`, `~~~`.
 - **The name must match an existing note** (case does not matter; `folder/name` works too). If there is no such note, nothing happens and your text stays where it is. Lines like `Things to do:` inside your text are skipped when no note has that name.
