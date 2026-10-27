@@ -5,21 +5,19 @@ const { EditorView } = require('@codemirror/view');
 
 // A line made only of 3+ of the same mark: ___  ---  ...  ///  ===  ***  ~~~
 const END_RE = /^\s*([_\-.\/=*~])\1{2,}\s*$/;
-// "@plan" or "@plan:" alone on its line -> any note name, created if missing
+// The only two header forms, alone on their line (note created if missing):
+//   "@Note name:" (colon optional)   and   "Note name::"
+// A plain "name:" line is ordinary text and never sends anything.
 const AT_RE = /^\s*@([^\s:#\[\]|@][^:#\[\]|@]*?)\s*:?\s*$/;
-// "plan:" alone on its line
-const COLON_RE = /^\s*([^:#\[\]|@]+?)\s*:\s*$/;
+const DOUBLE_RE = /^\s*([^:#\[\]|@]+?)\s*::\s*$/;
 // Left behind by an earlier send: "↪ [[x]] …" or the "> [!sent] ↪ [[x]] …" callout.
 const LINK_RE = /^\s*(>\s*\[!sent\][+-]?\s*)?↪ /;
 const QUOTE_RE = /^\s*>/; // any quote / callout line also ends a block
 const MAX_SCAN = 500; // lines to look back for the header
 
 function parseHead(text) {
-  let m = text.match(AT_RE);
-  if (m) return { name: m[1], at: true };
-  m = text.match(COLON_RE);
-  if (m) return { name: m[1], at: false };
-  return null;
+  const m = text.match(AT_RE) || text.match(DOUBLE_RE);
+  return m ? m[1].trim() : null;
 }
 
 // One question per send: just a link, or keep the text (small) under a link.
@@ -209,14 +207,10 @@ module.exports = class NoteRouterPlugin extends Plugin {
     const doc = view.state.doc;
     if (endLine > doc.lines || !END_RE.test(doc.line(endLine).text)) return;
 
-    // Walk up to the nearest "@name" line, or "name:" line whose note exists.
-    // Remember the nearest "name:" with no note, in case nothing else matches.
-    const badName = (s) => /[*"<>?\\|]/.test(s);
+    // Walk up to the nearest header line; it names the note (created if missing).
     let headLine = 0;
     let target = null;
     let newName = ''; // no note yet -> create it
-    let at = false;
-    let loose = null;
     // The block ends (going up) at an earlier end line, a link / callout left by
     // an earlier send, any quote line, or 2+ empty lines in a row.
     let blanks = 0;
@@ -225,17 +219,18 @@ module.exports = class NoteRouterPlugin extends Plugin {
       if (END_RE.test(text) || LINK_RE.test(text) || QUOTE_RE.test(text)) break;
       if (!text.trim()) { if (++blanks >= 2) break; continue; }
       blanks = 0;
-      const h = parseHead(text);
-      if (!h) continue;
-      const file = this.findTarget(h.name, source);
-      if (file) { headLine = n; target = file; at = h.at; break; }
-      if (badName(h.name)) continue;
-      if (h.at) { headLine = n; newName = h.name.trim(); at = true; break; }
-      // Offer to create only short names (a sentence ending in ":" is not a note name).
-      if (!loose && h.name.trim().split(/\s+/).length <= 3) loose = { n, name: h.name.trim() };
+      const name = parseHead(text);
+      if (!name) continue;
+      headLine = n;
+      target = this.findTarget(name, source);
+      if (!target) newName = name;
+      break;
     }
-    if (!target && !newName && loose) { headLine = loose.n; newName = loose.name; }
     if (!target && !newName) return;
+    if (newName && /[*"<>?\\|]/.test(newName)) {
+      new Notice(`Note Router: "${newName}" can't be a note name`);
+      return;
+    }
     if (target && target.path === source.path) return;
 
     const lines = [];

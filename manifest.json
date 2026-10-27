@@ -1,9 +1,9 @@
 {
   "id": "note-router",
   "name": "Note Router",
-  "version": "1.5.0",
+  "version": "2.0.0",
   "minAppVersion": "1.1.0",
-  "description": "Write \"@note\" or \"note:\" + text + a ___ / --- / ... line, and the text moves into that note under today's date.",
+  "description": "Write \"@Note name:\" or \"Note name::\" + text + a ___ / --- / ... line, and the text moves into that note under today's date.",
   "author": "dothanhhung",
   "authorUrl": "https://github.com/dothanhhung",
   "isDesktopOnly": false
