@@ -11,7 +11,7 @@ Need to try it this weekend.
 ___
 ```
 
-Press **Enter** after the end line. The text moves into the note called `diary`, under today's date at the top:
+When the end line is finished, the text moves into the note called `diary`, under today's date at the top:
 
 ```
 27.10.2026
@@ -24,6 +24,8 @@ older entry…
 
 It works the same way with any note name: `ideas:`, `work:`, `plan:`…
 
+The end line counts as finished when you press **Enter** after it, move the cursor off it, or stop typing on it for 1.5 seconds. There's also a command, **Note Router: Send the block above the cursor**, to give a hotkey to.
+
 ## Two ways to write the name
 | You write | What happens |
 |---|---|
@@ -34,7 +36,7 @@ So a normal line like `Plan:` in the middle of your writing never moves anything
 
 ## How it behaves
 - **End line** = 3 or more of the same mark on its own line: `___`, `---`, `...`, `///`, `===`, `***`, `~~~`.
-- **Name matching** ignores case; `folder/name` works too. Lines like `Things to do:` inside your text are skipped when a name line above them matches a note. If nothing matches, the nearest `name:` line is offered for creation (Esc keeps the text where it is).
+- **Name matching** ignores case; `folder/name` works too. Lines like `Things to do:` inside your text are skipped when a name line above them matches a note. If nothing matches, the nearest short `name:` line (up to 3 words) is offered for creation (Esc keeps the text where it is).
 - **Moved, with a link left behind.** After it is saved in the target, the block in the current note becomes one line pointing to it, e.g. `↪ [[diary]] 27.10.2026 · Had a great idea about the new app…`. Ctrl+Z brings the block back in the current note, but the copy in the target stays.
 - **Today's date:** if the target's first line is already today's date (`27.10.2026` or `27.10`), the new entry goes right under it. Otherwise a new date line is added on top. Frontmatter stays first.
 - Writing `diary:` inside the diary note itself does nothing.

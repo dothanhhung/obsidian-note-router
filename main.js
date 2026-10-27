@@ -98,17 +98,59 @@ module.exports = class NoteRouterPlugin extends Plugin {
     // Notes that "name:" sends to without asking. Grows via "Always send".
     this.trusted = Array.isArray(data.trusted) ? data.trusted : DEFAULT_TRUSTED.slice();
 
+    this.pending = null; // { view, source, line, timer } - end line typed, not yet sent
     this.registerEditorExtension(
       EditorView.updateListener.of((update) => this.onUpdate(update))
     );
+    this.register(() => this.cancelPending());
+
+    this.addCommand({
+      id: 'send-block',
+      name: 'Send the block above the cursor',
+      editorCallback: (editor, ctx) => {
+        const view = editor.cm;
+        if (!view || !ctx.file) return;
+        const doc = view.state.doc;
+        // Nearest end line at or below the cursor.
+        for (let n = doc.lineAt(view.state.selection.main.head).number; n <= doc.lines; n++) {
+          if (END_RE.test(doc.line(n).text)) { this.route(view, ctx.file, n); return; }
+        }
+        new Notice('Note Router: no ___ / --- / ... end line below the cursor');
+      },
+    });
   }
 
+  cancelPending() {
+    if (this.pending) clearTimeout(this.pending.timer);
+    this.pending = null;
+  }
+
+  // Send when the end line is finished: Enter after it, the cursor leaving it,
+  // or 1.5 s without typing on it.
   onUpdate(update) {
+    const view = update.view;
+    const p = this.pending;
+    if (p && p.view === view && (update.docChanged || update.selectionSet)) {
+      const head = update.state.selection.main.head;
+      const onLine = p.line <= update.state.doc.lines &&
+        update.state.doc.lineAt(head).number === p.line;
+      if (!onLine) {
+        this.cancelPending();
+        setTimeout(() => this.route(view, p.source, p.line), 0);
+        return;
+      }
+      if (update.docChanged) this.cancelPending(); // still typing on it; re-armed below
+    }
+
     if (!update.docChanged) return;
     if (!update.transactions.some((tr) => tr.isUserEvent('input'))) return;
 
-    // Find an end-marker line that just got a line break after it.
+    const info = update.state.field(editorInfoField, false);
+    const source = info && info.file;
+    if (!source) return;
     const doc = update.state.doc;
+
+    // An end line that just got a line break after it (Enter, paste): send now.
     let endLine = 0;
     update.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
       if (endLine || !inserted.toString().includes('\n')) return;
@@ -118,15 +160,24 @@ module.exports = class NoteRouterPlugin extends Plugin {
         if (END_RE.test(doc.line(n).text)) { endLine = n; break; }
       }
     });
-    if (!endLine) return;
+    if (endLine) {
+      // Can't dispatch inside an update listener.
+      setTimeout(() => this.route(view, source, endLine), 0);
+      return;
+    }
 
-    const info = update.state.field(editorInfoField, false);
-    const source = info && info.file;
-    if (!source) return;
-
-    const view = update.view;
-    // Can't dispatch inside an update listener.
-    setTimeout(() => this.route(view, source, endLine), 0);
+    // Typing on an end line: wait for a pause.
+    const line = doc.lineAt(update.state.selection.main.head);
+    if (END_RE.test(line.text)) {
+      this.cancelPending();
+      const pend = { view, source, line: line.number };
+      pend.timer = setTimeout(() => {
+        if (this.pending !== pend) return;
+        this.pending = null;
+        this.route(view, source, pend.line);
+      }, 1500);
+      this.pending = pend;
+    }
   }
 
   findTarget(name, source) {
@@ -157,7 +208,8 @@ module.exports = class NoteRouterPlugin extends Plugin {
       if (file) { headLine = n; target = file; at = h.at; break; }
       if (badName(h.name)) continue;
       if (h.at) { headLine = n; newName = h.name.trim(); at = true; break; }
-      if (!loose) loose = { n, name: h.name.trim() };
+      // Offer to create only short names (a sentence ending in ":" is not a note name).
+      if (!loose && h.name.trim().split(/\s+/).length <= 3) loose = { n, name: h.name.trim() };
     }
     if (!target && !newName && loose) { headLine = loose.n; newName = loose.name; }
     if (!target && !newName) return;
