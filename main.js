@@ -5,13 +5,14 @@ const { EditorView } = require('@codemirror/view');
 
 // A line made only of 3+ of the same mark: ___  ---  ...  ///  ===  ***  ~~~
 const END_RE = /^\s*([_\-.\/=*~])\1{2,}\s*$/;
-// "@plan" or "@plan:" alone on its line -> always sent, no question
+// "@plan" or "@plan:" alone on its line -> any note name, created if missing
 const AT_RE = /^\s*@([^\s:#\[\]|@][^:#\[\]|@]*?)\s*:?\s*$/;
-// "plan:" alone on its line -> sent without asking only for trusted notes
+// "plan:" alone on its line
 const COLON_RE = /^\s*([^:#\[\]|@]+?)\s*:\s*$/;
-const LINK_RE = /^\s*↪ /; // line left behind by an earlier send
+// Left behind by an earlier send: "↪ [[x]] …" or the "> [!sent] ↪ [[x]] …" callout.
+const LINK_RE = /^\s*(>\s*\[!sent\][+-]?\s*)?↪ /;
+const QUOTE_RE = /^\s*>/; // any quote / callout line also ends a block
 const MAX_SCAN = 500; // lines to look back for the header
-const DEFAULT_TRUSTED = ['diary'];
 
 function parseHead(text) {
   let m = text.match(AT_RE);
@@ -21,15 +22,16 @@ function parseHead(text) {
   return null;
 }
 
-class ConfirmModal extends Modal {
-  // create = true: the note does not exist yet, ask to create it.
+// One question per send: just a link, or keep the text (small) under a link.
+class SendModal extends Modal {
+  // create = true: the note does not exist yet.
   constructor(app, name, preview, create, onPick) {
     super(app);
     this.name = name;
     this.preview = preview;
     this.create = create;
     this.onPick = onPick;
-    this.picked = 'keep';
+    this.picked = { mode: 'cancel', remember: false };
   }
   onOpen() {
     const { contentEl } = this;
@@ -37,17 +39,23 @@ class ConfirmModal extends Modal {
       text: this.create ? `Create note "${this.name}" and send?` : `Send to "${this.name}"?`,
     });
     contentEl.createEl('p', { text: this.preview });
+
+    const lab = contentEl.createEl('label');
+    const box = lab.createEl('input');
+    box.type = 'checkbox';
+    lab.appendText(` Remember for "${this.name}" (don't ask again)`);
+
     const row = contentEl.createDiv({ cls: 'modal-button-container' });
-    const btn = (text, pick, cta) => {
+    const btn = (text, mode, cta) => {
       const b = row.createEl('button', { text });
       if (cta) b.addClass('mod-cta');
-      b.onclick = () => { this.picked = pick; this.close(); };
+      b.onclick = () => { this.picked = { mode, remember: box.checked }; this.close(); };
       return b;
     };
-    const send = btn(this.create ? 'Create & send' : 'Send', 'send', true);
-    btn(`Always send to "${this.name}"`, 'always');
-    btn('Keep here', 'keep');
-    send.focus(); // Enter = Send, Esc = Keep here
+    const first = btn('Just link', 'link', true);
+    btn('Keep text (small)', 'keep');
+    btn('Cancel', 'cancel');
+    first.focus(); // Enter = Just link, Esc = Cancel
   }
   onClose() {
     this.contentEl.empty();
@@ -93,11 +101,20 @@ function linkLine(app, target, source, content, now) {
   return `↪ ${link} ${todayStamp(now)} · ${preview}`;
 }
 
+// "Keep text": the text stays, small and dimmed (styles.css), under the link.
+//   > [!sent] ↪ [[diary]] 27.10.2026
+//   > today I feel…
+function keptBlock(app, target, source, content, now) {
+  const link = app.fileManager.generateMarkdownLink(target, source.path);
+  const body = content.split('\n').map((l) => (l.trim() ? `> ${l}` : '>')).join('\n');
+  return `> [!sent] ↪ ${link} ${todayStamp(now)}\n${body}`;
+}
+
 module.exports = class NoteRouterPlugin extends Plugin {
   async onload() {
     const data = (await this.loadData()) || {};
-    // Notes that "name:" sends to without asking. Grows via "Always send".
-    this.trusted = Array.isArray(data.trusted) ? data.trusted : DEFAULT_TRUSTED.slice();
+    // note name (lower case) -> 'link' | 'keep', set by "Remember for …"
+    this.remember = data.remember && typeof data.remember === 'object' ? data.remember : {};
 
     this.pending = null; // { view, source, line, timer } - end line typed, not yet sent
     this.registerEditorExtension(
@@ -200,12 +217,12 @@ module.exports = class NoteRouterPlugin extends Plugin {
     let newName = ''; // no note yet -> create it
     let at = false;
     let loose = null;
-    // The block ends (going up) at an earlier end line, a "↪" link line left by
-    // an earlier send, or 2+ empty lines in a row.
+    // The block ends (going up) at an earlier end line, a link / callout left by
+    // an earlier send, any quote line, or 2+ empty lines in a row.
     let blanks = 0;
     for (let n = endLine - 1; n >= 1 && n >= endLine - MAX_SCAN; n--) {
       const text = doc.line(n).text;
-      if (END_RE.test(text) || LINK_RE.test(text)) break;
+      if (END_RE.test(text) || LINK_RE.test(text) || QUOTE_RE.test(text)) break;
       if (!text.trim()) { if (++blanks >= 2) break; continue; }
       blanks = 0;
       const h = parseHead(text);
@@ -227,18 +244,20 @@ module.exports = class NoteRouterPlugin extends Plugin {
     if (!content) return;
     const headText = doc.line(headLine).text;
 
-    // "plan:" -> ask first unless the note is trusted. "@plan" never asks.
+    // Ask: just a link, or keep the text small? Skipped when remembered for this note.
     const name = target ? target.basename : newName.split('/').pop();
     const key = name.toLowerCase();
-    if (!at && (newName || !this.trusted.includes(key))) {
+    let mode = target ? this.remember[key] : null;
+    if (mode !== 'link' && mode !== 'keep') {
       const words = content.replace(/\s+/g, ' ').trim();
       const preview = words.length > 120 ? words.slice(0, 120) + '…' : words;
       const pick = await new Promise((res) =>
-        new ConfirmModal(this.app, name, preview, !!newName, res).open());
-      if (pick === 'keep') return;
-      if (pick === 'always' && !this.trusted.includes(key)) {
-        this.trusted.push(key);
-        await this.saveData({ trusted: this.trusted });
+        new SendModal(this.app, name, preview, !!newName, res).open());
+      if (pick.mode === 'cancel') return;
+      mode = pick.mode;
+      if (pick.remember) {
+        this.remember[key] = mode;
+        await this.saveData({ remember: this.remember });
       }
     }
 
@@ -261,14 +280,16 @@ module.exports = class NoteRouterPlugin extends Plugin {
       return;
     }
 
-    // Moved: swap the block (header .. end marker) for a one-line link.
+    // Swap the block (header .. end marker) for the link, or the small kept text.
     // Re-check it is still where we left it before replacing.
     const d = view.state.doc;
     if (endLine <= d.lines && headLine <= d.lines &&
         END_RE.test(d.line(endLine).text) && d.line(headLine).text === headText) {
       const from = d.line(headLine).from;
       const to = d.line(endLine).to;
-      const insert = linkLine(this.app, target, source, content, new Date());
+      const insert = mode === 'keep'
+        ? keptBlock(this.app, target, source, content, new Date())
+        : linkLine(this.app, target, source, content, new Date());
       view.dispatch({
         changes: { from, to, insert },
         // Cursor to the line below the link.
@@ -276,6 +297,7 @@ module.exports = class NoteRouterPlugin extends Plugin {
         userEvent: 'delete',
       });
     }
+    view.focus(); // back to writing after the box closes
     new Notice(newName ? `Created "${target.basename}" and sent` : `Sent to "${target.basename}"`);
   }
 };
