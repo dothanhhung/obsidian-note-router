@@ -9,6 +9,7 @@ const END_RE = /^\s*([_\-.\/=*~])\1{2,}\s*$/;
 const AT_RE = /^\s*@([^\s:#\[\]|@][^:#\[\]|@]*?)\s*:?\s*$/;
 // "plan:" alone on its line -> sent without asking only for trusted notes
 const COLON_RE = /^\s*([^:#\[\]|@]+?)\s*:\s*$/;
+const LINK_RE = /^\s*↪ /; // line left behind by an earlier send
 const MAX_SCAN = 500; // lines to look back for the header
 const DEFAULT_TRUSTED = ['diary'];
 
@@ -199,9 +200,14 @@ module.exports = class NoteRouterPlugin extends Plugin {
     let newName = ''; // no note yet -> create it
     let at = false;
     let loose = null;
+    // The block ends (going up) at an earlier end line, a "↪" link line left by
+    // an earlier send, or 2+ empty lines in a row.
+    let blanks = 0;
     for (let n = endLine - 1; n >= 1 && n >= endLine - MAX_SCAN; n--) {
       const text = doc.line(n).text;
-      if (END_RE.test(text)) break; // previous block's end
+      if (END_RE.test(text) || LINK_RE.test(text)) break;
+      if (!text.trim()) { if (++blanks >= 2) break; continue; }
+      blanks = 0;
       const h = parseHead(text);
       if (!h) continue;
       const file = this.findTarget(h.name, source);

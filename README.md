@@ -36,6 +36,7 @@ So a normal line like `Plan:` in the middle of your writing never moves anything
 
 ## How it behaves
 - **End line** = 3 or more of the same mark on its own line: `___`, `---`, `...`, `///`, `===`, `***`, `~~~`.
+- **Where a block starts:** the plugin looks up from the end line for the name line, but stops at an earlier end line, a `↪` link line from an earlier send, or 2+ empty lines in a row. A name line beyond that never takes your text.
 - **Name matching** ignores case; `folder/name` works too. Lines like `Things to do:` inside your text are skipped when a name line above them matches a note. If nothing matches, the nearest short `name:` line (up to 3 words) is offered for creation (Esc keeps the text where it is).
 - **Moved, with a link left behind.** After it is saved in the target, the block in the current note becomes one line pointing to it, e.g. `↪ [[diary]] 27.10.2026 · Had a great idea about the new app…`. Ctrl+Z brings the block back in the current note, but the copy in the target stays.
 - **Today's date:** if the target's first line is already today's date (`27.10.2026` or `27.10`), the new entry goes right under it. Otherwise a new date line is added on top. Frontmatter stays first.
