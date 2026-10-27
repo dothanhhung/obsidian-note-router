@@ -29,9 +29,10 @@ The end line counts as finished when you press **Enter** after it, move the curs
 ## The box
 | Button | What stays in the current note |
 |---|---|
-| **Just link** (Enter) | One line: `↪ [[diary]] 27.10.2026 · Had a great idea about the new app…` |
-| **Keep text (small)** | The text, small and dimmed, under the link (a `> [!sent]` callout, styled by `styles.css`) |
-| **Cancel** (Esc) | Nothing changes; your text stays as you typed it |
+| **Just link** (J or Enter) | One line: `↪ [[diary]] 27.10.2026 · Had a great idea about the new app…` |
+| **Keep text, small** (K) | The text, small and dimmed, under the link (a `> [!sent]` callout, styled by `styles.css`) |
+| **Nothing** (N) | Nothing; the block is simply gone from this note (it's in the target) |
+| **Cancel** (Esc) | Not sent; your text stays as you typed it |
 
 Tick **Remember for "diary"** to skip the box for that note from then on (it always uses the choice you made). The remembered choices are in the plugin's `data.json` (`"remember": {"diary": "link"}`); delete a name there to be asked again.
 

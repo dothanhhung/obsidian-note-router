@@ -50,12 +50,26 @@ class SendModal extends Modal {
       b.onclick = () => { this.picked = { mode, remember: box.checked }; this.close(); };
       return b;
     };
-    const first = btn('Just link', 'link', true);
-    btn('Keep text (small)', 'keep');
+    const first = btn('Just link (J)', 'link', true);
+    btn('Keep text, small (K)', 'keep');
+    btn('Nothing (N)', 'none');
     btn('Cancel', 'cancel');
     first.focus(); // Enter = Just link, Esc = Cancel
+
+    // J = just link, K = keep text, N = leave nothing behind.
+    this.onKey = (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const mode = { j: 'link', k: 'keep', n: 'none' }[e.key.toLowerCase()];
+      if (!mode) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.picked = { mode, remember: box.checked };
+      this.close();
+    };
+    document.addEventListener('keydown', this.onKey, true);
   }
   onClose() {
+    document.removeEventListener('keydown', this.onKey, true);
     this.contentEl.empty();
     this.onPick(this.picked);
   }
@@ -243,7 +257,7 @@ module.exports = class NoteRouterPlugin extends Plugin {
     const name = target ? target.basename : newName.split('/').pop();
     const key = name.toLowerCase();
     let mode = target ? this.remember[key] : null;
-    if (mode !== 'link' && mode !== 'keep') {
+    if (mode !== 'link' && mode !== 'keep' && mode !== 'none') {
       const words = content.replace(/\s+/g, ' ').trim();
       const preview = words.length > 120 ? words.slice(0, 120) + '…' : words;
       const pick = await new Promise((res) =>
@@ -275,22 +289,28 @@ module.exports = class NoteRouterPlugin extends Plugin {
       return;
     }
 
-    // Swap the block (header .. end marker) for the link, or the small kept text.
-    // Re-check it is still where we left it before replacing.
+    // Swap the block (header .. end marker) for the link, the small kept text,
+    // or nothing at all. Re-check it is still where we left it before replacing.
     const d = view.state.doc;
     if (endLine <= d.lines && headLine <= d.lines &&
         END_RE.test(d.line(endLine).text) && d.line(headLine).text === headText) {
       const from = d.line(headLine).from;
-      const to = d.line(endLine).to;
-      const insert = mode === 'keep'
-        ? keptBlock(this.app, target, source, content, new Date())
-        : linkLine(this.app, target, source, content, new Date());
-      view.dispatch({
-        changes: { from, to, insert },
-        // Cursor to the line below the link.
-        selection: { anchor: Math.min(from + insert.length + 1, d.length - (to - from) + insert.length) },
-        userEvent: 'delete',
-      });
+      if (mode === 'none') {
+        // Remove the block and its line break; cursor where the block was.
+        const to = endLine < d.lines ? d.line(endLine + 1).from : d.line(endLine).to;
+        view.dispatch({ changes: { from, to, insert: '' }, selection: { anchor: from }, userEvent: 'delete' });
+      } else {
+        const to = d.line(endLine).to;
+        const insert = mode === 'keep'
+          ? keptBlock(this.app, target, source, content, new Date())
+          : linkLine(this.app, target, source, content, new Date());
+        view.dispatch({
+          changes: { from, to, insert },
+          // Cursor to the line below the link.
+          selection: { anchor: Math.min(from + insert.length + 1, d.length - (to - from) + insert.length) },
+          userEvent: 'delete',
+        });
+      }
     }
     view.focus(); // back to writing after the box closes
     new Notice(newName ? `Created "${target.basename}" and sent` : `Sent to "${target.basename}"`);
