@@ -136,9 +136,10 @@ module.exports = class NoteRouterPlugin extends Plugin {
     const doc = view.state.doc;
     if (endLine > doc.lines || !END_RE.test(doc.line(endLine).text)) return;
 
-    // Walk up to the nearest "@name" / "name:" line whose name is an existing note.
+    // Walk up to the nearest "@name" line, or "name:" line whose note exists.
     let headLine = 0;
     let target = null;
+    let newName = ''; // "@name" with no note yet -> create it
     let at = false;
     for (let n = endLine - 1; n >= 1 && n >= endLine - MAX_SCAN; n--) {
       const text = doc.line(n).text;
@@ -147,13 +148,27 @@ module.exports = class NoteRouterPlugin extends Plugin {
       if (!h) continue;
       const file = this.findTarget(h.name, source);
       if (file) { headLine = n; target = file; at = h.at; break; }
+      if (h.at && !/[*"<>?\\|]/.test(h.name)) { headLine = n; newName = h.name.trim(); at = true; break; }
     }
-    if (!target || target.path === source.path) return;
+    if (!target && !newName) return;
+    if (target && target.path === source.path) return;
 
     const lines = [];
     for (let n = headLine + 1; n < endLine; n++) lines.push(doc.line(n).text);
     const content = lines.join('\n').replace(/^\s*\n/, '').replace(/\s+$/, '');
     if (!content) return;
+
+    if (newName) {
+      // New note goes where Obsidian puts new notes ("folder/name" keeps its folder).
+      const parent = newName.includes('/') ? null : this.app.fileManager.getNewFileParent(source.path);
+      const path = parent && parent.path !== '/' ? `${parent.path}/${newName}.md` : `${newName}.md`;
+      try {
+        target = await this.app.vault.create(path, '');
+      } catch (e) {
+        new Notice(`Note Router: could not create "${newName}": ${e.message}`);
+        return;
+      }
+    }
 
     // "plan:" for a note not yet trusted -> ask first. "@plan" never asks.
     const key = target.basename.toLowerCase();
@@ -192,7 +207,7 @@ module.exports = class NoteRouterPlugin extends Plugin {
         userEvent: 'delete',
       });
     }
-    new Notice(`Sent to "${target.basename}"`);
+    new Notice(newName ? `Created "${target.basename}" and sent` : `Sent to "${target.basename}"`);
   }
 };
 
