@@ -21,16 +21,20 @@ function parseHead(text) {
 }
 
 class ConfirmModal extends Modal {
-  constructor(app, name, preview, onPick) {
+  // create = true: the note does not exist yet, ask to create it.
+  constructor(app, name, preview, create, onPick) {
     super(app);
     this.name = name;
     this.preview = preview;
+    this.create = create;
     this.onPick = onPick;
     this.picked = 'keep';
   }
   onOpen() {
     const { contentEl } = this;
-    contentEl.createEl('h3', { text: `Send to "${this.name}"?` });
+    contentEl.createEl('h3', {
+      text: this.create ? `Create note "${this.name}" and send?` : `Send to "${this.name}"?`,
+    });
     contentEl.createEl('p', { text: this.preview });
     const row = contentEl.createDiv({ cls: 'modal-button-container' });
     const btn = (text, pick, cta) => {
@@ -39,7 +43,7 @@ class ConfirmModal extends Modal {
       b.onclick = () => { this.picked = pick; this.close(); };
       return b;
     };
-    const send = btn('Send', 'send', true);
+    const send = btn(this.create ? 'Create & send' : 'Send', 'send', true);
     btn(`Always send to "${this.name}"`, 'always');
     btn('Keep here', 'keep');
     send.focus(); // Enter = Send, Esc = Keep here
@@ -137,10 +141,13 @@ module.exports = class NoteRouterPlugin extends Plugin {
     if (endLine > doc.lines || !END_RE.test(doc.line(endLine).text)) return;
 
     // Walk up to the nearest "@name" line, or "name:" line whose note exists.
+    // Remember the nearest "name:" with no note, in case nothing else matches.
+    const badName = (s) => /[*"<>?\\|]/.test(s);
     let headLine = 0;
     let target = null;
-    let newName = ''; // "@name" with no note yet -> create it
+    let newName = ''; // no note yet -> create it
     let at = false;
+    let loose = null;
     for (let n = endLine - 1; n >= 1 && n >= endLine - MAX_SCAN; n--) {
       const text = doc.line(n).text;
       if (END_RE.test(text)) break; // previous block's end
@@ -148,8 +155,11 @@ module.exports = class NoteRouterPlugin extends Plugin {
       if (!h) continue;
       const file = this.findTarget(h.name, source);
       if (file) { headLine = n; target = file; at = h.at; break; }
-      if (h.at && !/[*"<>?\\|]/.test(h.name)) { headLine = n; newName = h.name.trim(); at = true; break; }
+      if (badName(h.name)) continue;
+      if (h.at) { headLine = n; newName = h.name.trim(); at = true; break; }
+      if (!loose) loose = { n, name: h.name.trim() };
     }
+    if (!target && !newName && loose) { headLine = loose.n; newName = loose.name; }
     if (!target && !newName) return;
     if (target && target.path === source.path) return;
 
@@ -157,6 +167,22 @@ module.exports = class NoteRouterPlugin extends Plugin {
     for (let n = headLine + 1; n < endLine; n++) lines.push(doc.line(n).text);
     const content = lines.join('\n').replace(/^\s*\n/, '').replace(/\s+$/, '');
     if (!content) return;
+    const headText = doc.line(headLine).text;
+
+    // "plan:" -> ask first unless the note is trusted. "@plan" never asks.
+    const name = target ? target.basename : newName.split('/').pop();
+    const key = name.toLowerCase();
+    if (!at && (newName || !this.trusted.includes(key))) {
+      const words = content.replace(/\s+/g, ' ').trim();
+      const preview = words.length > 120 ? words.slice(0, 120) + '…' : words;
+      const pick = await new Promise((res) =>
+        new ConfirmModal(this.app, name, preview, !!newName, res).open());
+      if (pick === 'keep') return;
+      if (pick === 'always' && !this.trusted.includes(key)) {
+        this.trusted.push(key);
+        await this.saveData({ trusted: this.trusted });
+      }
+    }
 
     if (newName) {
       // New note goes where Obsidian puts new notes ("folder/name" keeps its folder).
@@ -169,21 +195,6 @@ module.exports = class NoteRouterPlugin extends Plugin {
         return;
       }
     }
-
-    // "plan:" for a note not yet trusted -> ask first. "@plan" never asks.
-    const key = target.basename.toLowerCase();
-    if (!at && !this.trusted.includes(key)) {
-      const words = content.replace(/\s+/g, ' ').trim();
-      const preview = words.length > 120 ? words.slice(0, 120) + '…' : words;
-      const pick = await new Promise((res) =>
-        new ConfirmModal(this.app, target.basename, preview, res).open());
-      if (pick === 'keep') return;
-      if (pick === 'always') {
-        this.trusted.push(key);
-        await this.saveData({ trusted: this.trusted });
-      }
-    }
-    const headText = doc.line(headLine).text;
 
     try {
       await this.app.vault.process(target, (text) => addEntry(text, content, new Date()));

@@ -28,13 +28,13 @@ It works the same way with any note name: `ideas:`, `work:`, `plan:`…
 | You write | What happens |
 |---|---|
 | `@plan` or `@plan:` | Sent right away, no question. If there is no note called `plan` yet, it is created (in your default folder for new notes). |
-| `plan:` | Sent right away only if the note is **trusted** (`diary` is trusted from the start). Otherwise a box asks: **Send** (Enter), **Always send to "plan"** (trusts it from now on), or **Keep here** (Esc). |
+| `plan:` | If no note called `plan` exists, a box asks **Create & send** or **Keep here**. If it exists, it is sent right away only if the note is **trusted** (`diary` is trusted from the start). Otherwise a box asks: **Send** (Enter), **Always send to "plan"** (trusts it from now on), or **Keep here** (Esc). |
 
 So a normal line like `Plan:` in the middle of your writing never moves anything without asking. The trusted list is kept in the plugin's `data.json` (`"trusted": ["diary", …]`); delete a name there to be asked again.
 
 ## How it behaves
 - **End line** = 3 or more of the same mark on its own line: `___`, `---`, `...`, `///`, `===`, `***`, `~~~`.
-- **The name must match an existing note** (case does not matter; `folder/name` works too). With `name:`, if there is no such note, nothing happens and your text stays where it is. Lines like `Things to do:` inside your text are skipped when no note has that name.
+- **Name matching** ignores case; `folder/name` works too. Lines like `Things to do:` inside your text are skipped when a name line above them matches a note. If nothing matches, the nearest `name:` line is offered for creation (Esc keeps the text where it is).
 - **Moved, with a link left behind.** After it is saved in the target, the block in the current note becomes one line pointing to it, e.g. `↪ [[diary]] 27.10.2026 · Had a great idea about the new app…`. Ctrl+Z brings the block back in the current note, but the copy in the target stays.
 - **Today's date:** if the target's first line is already today's date (`27.10.2026` or `27.10`), the new entry goes right under it. Otherwise a new date line is added on top. Frontmatter stays first.
 - Writing `diary:` inside the diary note itself does nothing.
