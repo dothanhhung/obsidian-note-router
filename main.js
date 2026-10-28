@@ -1,6 +1,6 @@
 'use strict';
 
-const { Plugin, Modal, Notice, editorInfoField } = require('obsidian');
+const { Plugin, Modal, SuggestModal, Notice, editorInfoField } = require('obsidian');
 const { EditorView } = require('@codemirror/view');
 
 // A line made only of 3+ of the same mark: ___  ---  ...  ///  ===  ***  ~~~
@@ -75,6 +75,47 @@ class SendModal extends Modal {
   }
 }
 
+// "Move this to…": type to find a note, or pick "Create …" for a new one.
+// Resolves { file } or { create: name }, or null when closed.
+class NotePicker extends SuggestModal {
+  constructor(app, source, onPick) {
+    super(app);
+    this.source = source;
+    this.onPick = onPick;
+    this.setPlaceholder('Move this to… (type a note name)');
+  }
+  getSuggestions(query) {
+    const q = query.trim().toLowerCase();
+    const files = this.app.vault.getMarkdownFiles()
+      .filter((f) => f.path !== this.source.path && (!q || f.basename.toLowerCase().includes(q)))
+      .sort((a, b) => {
+        // Exact and prefix matches first, then most recently edited.
+        const rank = (f) => (f.basename.toLowerCase() === q ? 0 : f.basename.toLowerCase().startsWith(q) ? 1 : 2);
+        return rank(a) - rank(b) || (b.stat ? b.stat.mtime : 0) - (a.stat ? a.stat.mtime : 0);
+      })
+      .slice(0, 50)
+      .map((file) => ({ file }));
+    const exact = files.some((s) => s.file.basename.toLowerCase() === q);
+    return q && !exact ? [...files, { create: query.trim() }] : files;
+  }
+  renderSuggestion(s, el) {
+    if (s.file) {
+      el.createEl('div', { text: s.file.basename });
+      if (s.file.parent && s.file.parent.path !== '/') el.createEl('small', { text: s.file.parent.path });
+    } else {
+      el.createEl('div', { text: `Create "${s.create}"` });
+    }
+  }
+  onChooseSuggestion(s) {
+    this.chosen = true;
+    this.onPick(s);
+  }
+  onClose() {
+    // Obsidian closes the picker before calling onChooseSuggestion.
+    setTimeout(() => { if (!this.chosen) this.onPick(null); }, 0);
+  }
+}
+
 function pad(n) { return String(n).padStart(2, '0'); }
 function todayStamp(d) { return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`; }
 function isTodayLine(line, d) {
@@ -133,6 +174,8 @@ module.exports = class NoteRouterPlugin extends Plugin {
       EditorView.updateListener.of((update) => this.onUpdate(update))
     );
     this.register(() => this.cancelPending());
+    this.registerEvent(this.app.workspace.on('editor-menu', (menu, editor, mdView) =>
+      this.onEditorMenu(menu, editor, mdView)));
 
     this.addCommand({
       id: 'send-block',
@@ -251,7 +294,71 @@ module.exports = class NoteRouterPlugin extends Plugin {
     for (let n = headLine + 1; n < endLine; n++) lines.push(doc.line(n).text);
     const content = lines.join('\n').replace(/^\s*\n/, '').replace(/\s+$/, '');
     if (!content) return;
-    const headText = doc.line(headLine).text;
+    return this.send(view, source, {
+      from: doc.line(headLine).from, to: doc.line(endLine).to, target, newName, content,
+    });
+  }
+
+  // Right-click on a selection: "Move to <name>" when it starts with a header
+  // line, otherwise "Move this to…" with a note picker.
+  onEditorMenu(menu, editor, mdView) {
+    const view = editor && editor.cm;
+    const source = mdView && mdView.file;
+    if (!view || !source) return;
+    const sel = this.selectedLines(view);
+    if (!sel) return;
+    const head = parseHead(sel.firstLine);
+    menu.addItem((item) => item
+      .setTitle(head ? `Move to "${head.split('/').pop()}"` : 'Move this to…')
+      .setIcon('corner-up-right')
+      .onClick(() => this.moveSelection(view, source)));
+  }
+
+  // The selection grown to whole lines, or null when nothing is selected.
+  selectedLines(view) {
+    const { from, to } = view.state.selection.main;
+    if (from === to) return null;
+    const doc = view.state.doc;
+    const first = doc.lineAt(from);
+    let last = doc.lineAt(to);
+    if (to === last.from && last.number > first.number) last = doc.line(last.number - 1);
+    const text = doc.sliceString(first.from, last.to);
+    if (!text.trim()) return null;
+    return { from: first.from, to: last.to, text, firstLine: first.text };
+  }
+
+  async moveSelection(view, source) {
+    const sel = this.selectedLines(view);
+    if (!sel) return;
+    let lines = sel.text.split('\n');
+    let target = null;
+    let newName = '';
+    const head = parseHead(lines[0]);
+    if (head) {
+      lines = lines.slice(1);
+      target = this.findTarget(head, source);
+      if (!target) newName = head;
+    } else {
+      const pick = await new Promise((res) => new NotePicker(this.app, source, res).open());
+      if (!pick) return;
+      if (pick.file) target = pick.file; else newName = pick.create;
+    }
+    // An end line at the bottom of the selection is not content.
+    if (lines.length && END_RE.test(lines[lines.length - 1])) lines = lines.slice(0, -1);
+    const content = lines.join('\n').replace(/^\s*\n/, '').replace(/\s+$/, '');
+    if (!content) { new Notice('Note Router: nothing to move'); return; }
+    if (newName && /[*"<>?\\|]/.test(newName)) {
+      new Notice(`Note Router: "${newName}" can't be a note name`);
+      return;
+    }
+    if (target && target.path === source.path) { new Notice('Note Router: that is this note'); return; }
+    return this.send(view, source, { from: sel.from, to: sel.to, target, newName, content });
+  }
+
+  // Ask how to leave it, write it into the target under today's date, then
+  // replace source [from, to] with the link, the small kept text, or nothing.
+  async send(view, source, { from, to, target, newName, content }) {
+    const original = view.state.doc.sliceString(from, to);
 
     // Ask: just a link, or keep the text small? Skipped when remembered for this note.
     const name = target ? target.basename : newName.split('/').pop();
@@ -289,18 +396,15 @@ module.exports = class NoteRouterPlugin extends Plugin {
       return;
     }
 
-    // Swap the block (header .. end marker) for the link, the small kept text,
-    // or nothing at all. Re-check it is still where we left it before replacing.
+    // Swap the block for the link, the small kept text, or nothing at all.
+    // Only if it is still exactly where we left it.
     const d = view.state.doc;
-    if (endLine <= d.lines && headLine <= d.lines &&
-        END_RE.test(d.line(endLine).text) && d.line(headLine).text === headText) {
-      const from = d.line(headLine).from;
+    if (to <= d.length && d.sliceString(from, to) === original) {
       if (mode === 'none') {
         // Remove the block and its line break; cursor where the block was.
-        const to = endLine < d.lines ? d.line(endLine + 1).from : d.line(endLine).to;
-        view.dispatch({ changes: { from, to, insert: '' }, selection: { anchor: from }, userEvent: 'delete' });
+        const end = d.sliceString(to, to + 1) === '\n' ? to + 1 : to;
+        view.dispatch({ changes: { from, to: end, insert: '' }, selection: { anchor: from }, userEvent: 'delete' });
       } else {
-        const to = d.line(endLine).to;
         const insert = mode === 'keep'
           ? keptBlock(this.app, target, source, content, new Date())
           : linkLine(this.app, target, source, content, new Date());
@@ -311,6 +415,8 @@ module.exports = class NoteRouterPlugin extends Plugin {
           userEvent: 'delete',
         });
       }
+    } else {
+      new Notice('Note Router: sent, but the text changed meanwhile, so it was left in place');
     }
     view.focus(); // back to writing after the box closes
     new Notice(newName ? `Created "${target.basename}" and sent` : `Sent to "${target.basename}"`);

@@ -26,6 +26,13 @@ It works the same way with any note name: `ideas::`, `@Big Plan:`…
 
 The end line counts as finished when you press **Enter** after it, move the cursor off it, or stop typing on it for 1.5 seconds. There's also a command, **Note Router: Send the block above the cursor**, that you can bind to a hotkey.
 
+## Right-click a selection
+Select some lines and right-click:
+- If the selection starts with a header line (`@Note name:` or `Note name::`), the menu shows **Move to "Note name"**. No end line needed.
+- Otherwise it shows **Move this to…**, which opens a note picker: type to find a note, or pick **Create "…"** to make a new one.
+
+The selection is taken as whole lines. Then the same box below appears.
+
 ## The box
 | Button | What stays in the current note |
 |---|---|
