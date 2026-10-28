@@ -1,7 +1,7 @@
 {
   "id": "note-router",
   "name": "Note Router",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "minAppVersion": "1.1.0",
   "description": "Write \"@Note name:\" or \"Note name::\" + text + a ___ / --- / ... line, and the text moves into that note under today's date.",
   "author": "dothanhhung",

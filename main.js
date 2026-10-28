@@ -20,6 +20,11 @@ function parseHead(text) {
   return m ? m[1].trim() : null;
 }
 
+// The window an element lives in (Obsidian pop-out windows have their own).
+function activeWindowOf(el) {
+  return (el && el.ownerDocument && el.ownerDocument.defaultView) || window;
+}
+
 // One question per send: just a link, or keep the text (small) under a link.
 class SendModal extends Modal {
   // create = true: the note does not exist yet.
@@ -44,10 +49,17 @@ class SendModal extends Modal {
     lab.appendText(` Remember for "${this.name}" (don't ask again)`);
 
     const row = contentEl.createDiv({ cls: 'modal-button-container' });
+    // One way out, whichever path (button, key, Esc) gets there first.
+    this.pick = (mode) => {
+      if (this.done) return;
+      this.done = true;
+      this.picked = { mode, remember: box.checked };
+      this.close();
+    };
     const btn = (text, mode, cta) => {
       const b = row.createEl('button', { text });
       if (cta) b.addClass('mod-cta');
-      b.onclick = () => { this.picked = { mode, remember: box.checked }; this.close(); };
+      b.addEventListener('click', () => this.pick(mode));
       return b;
     };
     const first = btn('Just link (J)', 'link', true);
@@ -56,20 +68,30 @@ class SendModal extends Modal {
     btn('Cancel', 'cancel');
     first.focus(); // Enter = Just link, Esc = Cancel
 
-    // J = just link, K = keep text, N = leave nothing behind.
+    // J = just link, K = keep text, N = leave nothing behind. Read the physical
+    // key (e.code): with a Vietnamese input tool or another layout, e.key can be
+    // "Process" or a different letter.
+    const KEYS = { KeyJ: 'link', KeyK: 'keep', KeyN: 'none' };
     this.onKey = (e) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
-      const mode = { j: 'link', k: 'keep', n: 'none' }[e.key.toLowerCase()];
+      const mode = KEYS[e.code] || { j: 'link', k: 'keep', n: 'none' }[(e.key || '').toLowerCase()];
       if (!mode) return;
       e.preventDefault();
       e.stopPropagation();
-      this.picked = { mode, remember: box.checked };
-      this.close();
+      this.pick(mode);
     };
-    document.addEventListener('keydown', this.onKey, true);
+    // Caught on the window first (before Obsidian's own key handling), and
+    // through the modal's key scope as a second route.
+    this.keyWin = activeWindowOf(this.modalEl || this.contentEl);
+    this.keyWin.addEventListener('keydown', this.onKey, true);
+    if (this.scope && this.scope.register) {
+      for (const k of ['j', 'k', 'n', 'J', 'K', 'N']) {
+        this.scope.register([], k, (e) => { this.onKey(e); return false; });
+      }
+    }
   }
   onClose() {
-    document.removeEventListener('keydown', this.onKey, true);
+    if (this.keyWin) this.keyWin.removeEventListener('keydown', this.onKey, true);
     this.contentEl.empty();
     this.onPick(this.picked);
   }
